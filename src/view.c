@@ -389,3 +389,40 @@ view_update_app_id(struct view *view)
 	wlr_foreign_toplevel_handle_v1_set_app_id(
 		view->toplevel_handle, app_id);
 }
+
+struct view *view_from_wlr_surface(struct wlr_surface *wlr_surface) {
+	if (wlr_surface_is_xdg_surface(wlr_surface)) {
+		struct wlr_xdg_surface *xdg_surface =
+			wlr_xdg_surface_from_wlr_surface(wlr_surface);
+		if (xdg_surface == NULL) {
+			return NULL;
+		}
+		return view_from_wlr_xdg_surface(xdg_surface);
+	}
+#if HAVE_XWAYLAND
+	if (wlr_surface_is_xwayland_surface(wlr_surface)) {
+		struct wlr_xwayland_surface *xsurface =
+			wlr_xwayland_surface_from_wlr_surface(wlr_surface);
+		if (xsurface == NULL) {
+			return NULL;
+		}
+		return view_from_wlr_xwayland_surface(xsurface);
+	}
+#endif
+	if (wlr_surface_is_subsurface(wlr_surface)) {
+		struct wlr_subsurface *subsurface =
+			wlr_subsurface_from_wlr_surface(wlr_surface);
+		if (subsurface == NULL) {
+			return NULL;
+		}
+		return view_from_wlr_surface(subsurface->parent);
+	}
+	if (wlr_surface_is_layer_surface(wlr_surface)) {
+		return NULL;
+	}
+
+	const char *role = wlr_surface->role ? wlr_surface->role->name : NULL;
+	wlr_log(WLR_ERROR, "Surface of unknown type (role %s): %p",
+		role, wlr_surface);
+	return NULL;
+}

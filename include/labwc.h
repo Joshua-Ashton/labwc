@@ -24,11 +24,13 @@
 #include <wlr/types/wlr_output_management_v1.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_pointer.h>
+#include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_seat.h>
 #include <wlr/types/wlr_server_decoration.h>
 #include <wlr/types/wlr_xcursor_manager.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_shell.h>
+#include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/util/log.h>
 #if HAVE_XWAYLAND
 #include <wlr/xwayland.h>
@@ -98,6 +100,9 @@ struct seat {
 	struct wl_listener destroy_drag;
 };
 
+void cursor_constrain(struct server *server,
+		struct wlr_pointer_constraint_v1 *constraint);
+
 struct server {
 	struct wl_display *wl_display;
 	struct wlr_renderer *renderer;
@@ -141,7 +146,17 @@ struct server {
 	struct wl_listener output_manager_apply;
 	struct wlr_output_configuration_v1 *pending_output_config;
 
+	struct wlr_relative_pointer_manager_v1 *relative_pointer_manager;
+
 	struct wlr_foreign_toplevel_manager_v1 *foreign_toplevel_manager;
+
+	struct wlr_pointer_constraints_v1 *pointer_constraints;
+	struct wl_listener pointer_constraint;
+
+	struct wlr_pointer_constraint_v1 *active_constraint;
+	struct wl_listener constraint_commit;
+	pixman_region32_t confine; // invalid if active_constraint == NULL
+	bool active_confine_requires_warp;
 
 	/* Set when in cycle (alt-tab) mode */
 	struct view *cycle_view;
@@ -149,6 +164,16 @@ struct server {
 	struct theme *theme;
 	struct menu *rootmenu;
 };
+
+struct pointer_constraint {
+	struct server *server;
+	struct wlr_pointer_constraint_v1 *constraint;
+
+	struct wl_listener set_region;
+	struct wl_listener destroy;
+};
+
+void warp_to_constraint_cursor_hint(struct server *server);
 
 struct output {
 	struct wl_list link; /* server::outputs */
@@ -434,5 +459,13 @@ void osd_update(struct server *server);
  */
 bool input_inhibit_blocks_surface(struct seat *seat,
 	struct wl_resource *resource);
+
+struct view *view_from_wlr_xdg_surface(
+	struct wlr_xdg_surface *xdg_surface);
+#if HAVE_XWAYLAND
+struct view *view_from_wlr_xwayland_surface(
+	struct wlr_xwayland_surface *xsurface);
+#endif
+struct view *view_from_wlr_surface(struct wlr_surface *surface);
 
 #endif /* __LABWC_H */

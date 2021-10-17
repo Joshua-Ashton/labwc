@@ -180,6 +180,7 @@ seat_init(struct server *server)
 		wlr_log(WLR_ERROR, "cannot allocate seat");
 		exit(EXIT_FAILURE);
 	}
+	seat->seat->data = seat;
 
 	wl_list_init(&seat->inputs);
 	seat->new_input.notify = new_input_notify;

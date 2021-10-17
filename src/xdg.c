@@ -399,6 +399,8 @@ xdg_surface_new(struct wl_listener *listener, void *data)
 	view->xdg_surface = xdg_surface;
 	wl_list_init(&view->ssd.parts);
 
+	view->xdg_surface->data = view;
+
 	view->map.notify = handle_map;
 	wl_signal_add(&xdg_surface->events.map, &view->map);
 	view->unmap.notify = handle_unmap;
@@ -427,4 +429,9 @@ xdg_surface_new(struct wl_listener *listener, void *data)
 	wl_signal_add(&toplevel->events.set_app_id, &view->set_app_id);
 
 	wl_list_insert(&server->views, &view->link);
+}
+
+struct view *view_from_wlr_xdg_surface(
+		struct wlr_xdg_surface *xdg_surface) {
+	return xdg_surface->data;
 }

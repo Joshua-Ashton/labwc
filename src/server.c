@@ -143,6 +143,89 @@ handle_input_disinhibit(struct wl_listener *listener, void *data)
 	seat_disinhibit_input(&server->seat);
 }
 
+
+static void
+handle_pointer_constraint_set_region(struct wl_listener *listener,
+		void *data) {
+	struct pointer_constraint *lab_constraint =
+		wl_container_of(listener, lab_constraint, set_region);
+	struct server *server = lab_constraint->server;
+
+	server->active_confine_requires_warp = true;
+}
+
+void
+warp_to_constraint_cursor_hint(struct server *server) {
+	struct wlr_pointer_constraint_v1 *constraint = server->active_constraint;
+
+	if (constraint->current.committed &
+			WLR_POINTER_CONSTRAINT_V1_STATE_CURSOR_HINT) {
+		double sx = constraint->current.cursor_hint.x;
+		double sy = constraint->current.cursor_hint.y;
+
+		struct view *view = view_from_wlr_surface(constraint->surface);
+
+		//struct border border = view_border(view);
+		double lx = sx + view->x; //+ border.left;
+		double ly = sy + view->y; //+ border.top;
+
+		wlr_cursor_warp(server->seat.cursor, NULL, lx, ly);
+
+		/* Warp the pointer as well, so that on the next pointer rebase we don't
+		 * send an unexpected synthetic motion event to clients. */
+		wlr_seat_pointer_warp(constraint->seat, sx, sy);
+	}
+}
+
+static void
+handle_constraint_destroy(struct wl_listener *listener, void *data) {
+	struct pointer_constraint *lab_constraint =
+		wl_container_of(listener, lab_constraint, destroy);
+	struct wlr_pointer_constraint_v1 *constraint = data;
+	struct server *server = lab_constraint->server;
+
+	wl_list_remove(&lab_constraint->set_region.link);
+	wl_list_remove(&lab_constraint->destroy.link);
+
+	if (server->active_constraint == constraint) {
+		warp_to_constraint_cursor_hint(server);
+
+		if (server->constraint_commit.link.next != NULL) {
+			wl_list_remove(&server->constraint_commit.link);
+		}
+		wl_list_init(&server->constraint_commit.link);
+		server->active_constraint = NULL;
+	}
+
+	free(lab_constraint);
+}
+
+static void
+handle_pointer_constraint(struct wl_listener *listener, void *data) {
+	struct wlr_pointer_constraint_v1 *constraint = data;
+	struct seat *seat = constraint->seat->data;
+
+	struct pointer_constraint *lab_constraint =
+		calloc(1, sizeof(struct pointer_constraint));
+	lab_constraint->server = seat->server;
+	lab_constraint->constraint = constraint;
+
+	lab_constraint->set_region.notify = handle_pointer_constraint_set_region;
+	wl_signal_add(&constraint->events.set_region, &lab_constraint->set_region);
+
+	lab_constraint->destroy.notify = handle_constraint_destroy;
+	wl_signal_add(&constraint->events.destroy, &lab_constraint->destroy);
+
+	struct view *focus = desktop_focused_view(seat->server);
+	if (focus) {
+		struct wlr_surface *surface = focus->surface;
+		if (surface == constraint->surface) {
+			cursor_constrain(seat->server, constraint);
+		}
+	}
+}
+
+
 void
 server_init(struct server *server)
 {
@@ -264,6 +347,9 @@ server_init(struct server *server)
 				  WLR_SERVER_DECORATION_MANAGER_MODE_SERVER :
 				  WLR_SERVER_DECORATION_MANAGER_MODE_CLIENT);
 
+	server->relative_pointer_manager =
+		wlr_relative_pointer_manager_v1_create(server->wl_display);
+
 	wlr_export_dmabuf_manager_v1_create(server->wl_display);
 	wlr_screencopy_manager_v1_create(server->wl_display);
 	wlr_data_control_manager_v1_create(server->wl_display);
@@ -286,6 +372,13 @@ server_init(struct server *server)
 
 	server->foreign_toplevel_manager =
 		wlr_foreign_toplevel_manager_v1_create(server->wl_display);
+
+	server->pointer_constraints =
+		wlr_pointer_constraints_v1_create(server->wl_display);
+	server->pointer_constraint.notify = handle_pointer_constraint;
+	wl_signal_add(&server->pointer_constraints->events.new_constraint,
+		&server->pointer_constraint);
+	wl_list_init(&server->constraint_commit.link);
 
 	layers_init(server);
 

@@ -336,6 +336,8 @@ xwayland_surface_new(struct wl_listener *listener, void *data)
 	view->xwayland_surface = xsurface;
 	wl_list_init(&view->ssd.parts);
 
+	view->xwayland_surface->data = view;
+
 	view->map.notify = handle_map;
 	wl_signal_add(&xsurface->events.map, &view->map);
 	view->unmap.notify = handle_unmap;
@@ -364,4 +366,9 @@ xwayland_surface_new(struct wl_listener *listener, void *data)
 	wl_signal_add(&xsurface->events.set_class, &view->set_app_id);
 
 	wl_list_insert(&view->server->views, &view->link);
+}
+
+struct view *view_from_wlr_xwayland_surface(
+		struct wlr_xwayland_surface *xsurface) {
+	return xsurface->data;
 }

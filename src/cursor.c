@@ -8,6 +8,7 @@
 #include "ssd.h"
 #include "config/mousebind.h"
 #include <wlr/types/wlr_primary_selection.h>
+#include <wlr/util/region.h>
 
 static void
 request_cursor_notify(struct wl_listener *listener, void *data)
@@ -68,6 +69,107 @@ request_start_drag_notify(struct wl_listener *listener, void *data)
 	} else {
 		wlr_data_source_destroy(event->drag->source);
 	}
+}
+
+static void check_constraint_region(struct server *server) {
+	struct wlr_pointer_constraint_v1 *constraint = server->active_constraint;
+	pixman_region32_t *region = &constraint->region;
+	struct view *view = view_from_wlr_surface(constraint->surface);
+	if (server->active_confine_requires_warp && view) {
+		server->active_confine_requires_warp = false;
+
+		// TODO: borders...
+		double sx = server->seat.cursor->x;// - con->pending.content_x + view->geometry.x;
+		double sy = server->seat.cursor->y;// - con->pending.content_y + view->geometry.y;
+
+		if (!pixman_region32_contains_point(region,
+				floor(sx), floor(sy), NULL)) {
+			int nboxes;
+			pixman_box32_t *boxes = pixman_region32_rectangles(region, &nboxes);
+			if (nboxes > 0) {
+				double sx = (boxes[0].x1 + boxes[0].x2) / 2.;
+				double sy = (boxes[0].y1 + boxes[0].y2) / 2.;
+
+				wlr_cursor_warp_closest(server->seat.cursor, NULL,
+					sx,// + con->pending.content_x - view->geometry.x,
+					sy);// + con->pending.content_y - view->geometry.y);
+
+				//cursor_rebase(server);
+			}
+		}
+	}
+
+	// A locked pointer will result in an empty region, thus disallowing all movement
+	if (constraint->type == WLR_POINTER_CONSTRAINT_V1_CONFINED) {
+		pixman_region32_copy(&server->confine, region);
+	} else {
+		pixman_region32_clear(&server->confine);
+	}
+}
+
+static void handle_constraint_commit(struct wl_listener *listener,
+		void *data) {
+	struct server *server =
+		wl_container_of(listener, server, constraint_commit);
+	struct wlr_pointer_constraint_v1 *constraint = server->active_constraint;
+	assert(constraint->surface == data);
+
+	check_constraint_region(server);
+}
+
+void cursor_constrain(struct server *server,
+		struct wlr_pointer_constraint_v1 *constraint) {
+	/*struct seat_config *config = seat_get_config(cursor->seat);
+	if (!config) {
+		config = seat_get_config_by_name("*");
+	}
+
+	if (!config || config->allow_constrain == CONSTRAIN_DISABLE) {
+		return;
+	}*/
+
+	if (server->active_constraint == constraint) {
+		return;
+	}
+
+	wl_list_remove(&server->constraint_commit.link);
+	if (server->active_constraint) {
+		if (constraint == NULL) {
+			warp_to_constraint_cursor_hint(server);
+		}
+		wlr_pointer_constraint_v1_send_deactivated(
+			server->active_constraint);
+	}
+
+	server->active_constraint = constraint;
+
+	if (constraint == NULL) {
+		wl_list_init(&server->constraint_commit.link);
+		return;
+	}
+
+	server->active_confine_requires_warp = true;
+
+	// FIXME: Big hack, stolen from wlr_pointer_constraints_v1.c:121.
+	// This is necessary because the focus may be set before the surface
+	// has finished committing, which means that warping won't work properly,
+	// since this code will be run *after* the focus has been set.
+	// That is why we duplicate the code here.
+	if (pixman_region32_not_empty(&constraint->current.region)) {
+		pixman_region32_intersect(&constraint->region,
+			&constraint->surface->input_region, &constraint->current.region);
+	} else {
+		pixman_region32_copy(&constraint->region,
+			&constraint->surface->input_region);
+	}
+
+	check_constraint_region(server);
+
+	wlr_pointer_constraint_v1_send_activated(constraint);
+
+	server->constraint_commit.notify = handle_constraint_commit;
+	wl_signal_add(&constraint->surface->events.commit,
+		&server->constraint_commit);
 }
 
 static void
@@ -245,6 +347,10 @@ cursor_motion(struct wl_listener *listener, void *data)
 	 */
 	struct seat *seat = wl_container_of(listener, seat, cursor_motion);
 	struct wlr_event_pointer_motion *event = data;
+	wlr_relative_pointer_manager_v1_send_relative_motion(
+		seat->server->relative_pointer_manager,
+		seat->seat, (uint64_t)event->time_msec * 1000,
+		event->delta_x, event->delta_y, event->unaccel_dx, event->unaccel_dy);
 
 	/*
 	 * The cursor doesn't move unless we tell it to. The cursor
@@ -253,8 +359,33 @@ cursor_motion(struct wl_listener *listener, void *data)
 	 * device which generated the event. You can pass NULL for the device
 	 * if you want to move the cursor around without any input.
 	 */
-	wlr_cursor_move(seat->cursor, event->device, event->delta_x,
-		event->delta_y);
+	
+	double dx = event->delta_x;
+	double dy = event->delta_y;
+
+	if (seat->server->active_constraint) {
+		/* TODO: Do this only for pointers */
+		struct wlr_surface *surface = NULL;
+		double sx, sy;
+		int view_area = LAB_SSD_NONE;
+		desktop_surface_and_view_at(seat->server,
+			seat->cursor->x, seat->cursor->y, &surface,
+			&sx, &sy, &view_area);
+
+		if (seat->server->active_constraint->surface != surface) {
+			return;
+		}
+		
+		double sx_confined, sy_confined;
+		if (!wlr_region_confine(&seat->server->confine, sx, sy, sx + dx, sy + dy,
+				&sx_confined, &sy_confined)) {
+			return;
+		}
+
+		dx = sx_confined - sx;
+		dy = sy_confined - sy;
+	}
+	wlr_cursor_move(seat->cursor, event->device, dx, dy);
 	process_cursor_motion(seat->server, event->time_msec);
 }
 
@@ -284,6 +415,19 @@ cursor_motion_absolute(struct wl_listener *listener, void *data)
 	struct seat *seat = wl_container_of(
 		listener, seat, cursor_motion_absolute);
 	struct wlr_event_pointer_motion_absolute *event = data;
+
+	double lx, ly;
+	wlr_cursor_absolute_to_layout_coords(seat->cursor, event->device,
+			event->x, event->y, &lx, &ly);
+
+	double dx = lx - seat->cursor->x;
+	double dy = ly - seat->cursor->y;
+
+	wlr_relative_pointer_manager_v1_send_relative_motion(
+		seat->server->relative_pointer_manager,
+		seat->seat, (uint64_t)event->time_msec * 1000,
+		dx, dy, dx, dy);
+
 	wlr_cursor_warp_absolute(seat->cursor, event->device, event->x, event->y);
 	process_cursor_motion(seat->server, event->time_msec);
 }
