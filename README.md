@@ -5,13 +5,14 @@ href="https://github.com/labwc/labwc-acceptance-criteria/blob/main/README.md">Sc
 href="https://web.libera.chat/gamja/?channels=#labwc">IRC Channel</a>] [<a
 href="NEWS.md">Release&nbsp;Notes</a>]</h3>
 
-- [1. What is this?](#1-what-is-this)
-- [2. Build](#2-build)
-- [3. Install](#3-install)
-- [4. Configure](#4-configure)
-- [5. Run](#5-run)
-- [6. Integrate](#6-integrate)
-- [7. Roadmap](#7-roadmap)
+- [labwc](#labwc)
+  - [1. What is this?](#1-what-is-this)
+  - [2. Build](#2-build)
+  - [3. Install](#3-install)
+  - [4. Configure](#4-configure)
+  - [5. Run](#5-run)
+  - [6. Integrate](#6-integrate)
+  - [7. Roadmap](#7-roadmap)
 
 ## 1. What is this?
 
@@ -102,6 +103,8 @@ For themes, search the internet for "openbox themes" and place them in `~/.local
 ## 5. Run
 
     ./build/labwc [-s <command>]
+
+> **_NOTE:_** If you are running on **NVIDIA**, you will need the `nvidia-drm.modeset=1` kernel parameter.
 
 Click on the background to launch a menu.
 
